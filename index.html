@@ -1,0 +1,430 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import QRCode from "qrcode";
+
+/**
+ * 재난대응 임무 안내 웹앱 – React Single-File v2.0
+ * - Fix: "Unexpected token (1:0)" — 이전 문서는 전체 HTML이어서 TSX 파서가 < 로 시작하는 문서를 읽지 못함.
+ *         본 파일은 올바른 TSX 구성(React 컴포넌트 export default)으로 전면 교체했습니다.
+ * - 기능: 부서/이름/직책 입력 → 부서별 임무 출력, KR/EN 토글, 비상연락망 검색, QR 생성/저장, 결과 복사/인쇄
+ * - 의존: react, qrcode (캔버스 환경의 NPM 사용 가능)
+ * - 스타일: 컴포넌트 내부 style 태그로 최소 CSS 포함 (별도 빌드/도구 불필요)
+ */
+
+// =========================
+// ======== DATA ===========
+// =========================
+
+type Localized = { ko: string; en: string };
+
+type Task = {
+  title: Localized;
+  steps: Localized[];
+  note?: Localized;
+};
+
+type DeptTasks = Record<string, Task>;
+
+type Lang = "ko" | "en";
+
+type Contact = { dept: string; name: string; title: string; phone: string };
+
+const DUTIES: DeptTasks = {
+  "안전보안팀": {
+    title: { ko: "재난대응 총괄 및 상황실 운영", en: "Overall response & Situation Room" },
+    steps: [
+      { ko: "상황전파 및 유관기관 공조 체계 가동", en: "Disseminate situation & activate inter-agency coordination" },
+      { ko: "현장 통제 구역 설정·완료 보고", en: "Set control zones & report completion" },
+      { ko: "피난 유도 및 인원 현황 취합", en: "Guide evacuation & compile headcount" },
+      { ko: "훈련평가표/상황기록부 작성", en: "Complete drill evaluation & log" }
+    ],
+    note: { ko: "법정 훈련 문서 양식 사용(별지).", en: "Use statutory drill forms (annex)." }
+  },
+  "시설팀": {
+    title: { ko: "전력·설비 안전조치 및 2차 피해 예방", en: "Utilities safety & secondary-damage prevention" },
+    steps: [
+      { ko: "전력·가스·공조 차단 여부 점검", en: "Verify power/gas/HVAC shutdown" },
+      { ko: "소방설비 상태 확인", en: "Check fire systems (detection/alarm/sprinkler)" },
+      { ko: "출입구·승강기 운용 통제 지원", en: "Support entrance/elevator control" },
+      { ko: "복구 계획 수립 및 보고", en: "Draft recovery plan & report" }
+    ]
+  },
+  "총무팀": {
+    title: { ko: "지원 총괄 및 차량·물자 지원", en: "General support incl. vehicles/supplies" },
+    steps: [
+      { ko: "차량 통제 및 안내 인력 배치", en: "Deploy staff for traffic control" },
+      { ko: "임시 집결지 물자 지원", en: "Supply assembly-point materials" },
+      { ko: "외부 방문자/행사 인원 안내", en: "Guide visitors/event participants" },
+      { ko: "사후 정산 및 기록 보관", en: "Post-drill settlement & records" }
+    ]
+  },
+  "정보전산팀": {
+    title: { ko: "비상 통신망 유지 및 시스템 알림", en: "Emergency comms & system notices" },
+    steps: [
+      { ko: "비상 알림 문자/푸시 발송 지원", en: "Support SMS/push alerts" },
+      { ko: "상황실 네트워크/화상회의 지원", en: "Support network/video conference" },
+      { ko: "서버·포털 공지 게시", en: "Post notices on servers/portal" },
+      { ko: "복구 후 로그 아카이브", en: "Archive logs post-recovery" }
+    ]
+  }
+};
+
+const CONTACTS: Contact[] = [
+  { dept: "안전보안팀", name: "정욱진", title: "대리", phone: "010-0000-0000" },
+  { dept: "안전보안팀", name: "홍길동", title: "팀장", phone: "010-1111-1111" },
+  { dept: "시설팀", name: "김설비", title: "과장", phone: "010-2222-2222" },
+  { dept: "총무팀", name: "이총무", title: "주임", phone: "010-3333-3333" },
+  { dept: "정보전산팀", name: "박전산", title: "파트장", phone: "010-4444-4444" }
+];
+
+const STR = {
+  dept: { ko: "부서", en: "Department" },
+  selectDept: { ko: "부서를 선택하세요", en: "Select a department" },
+  name: { ko: "이름", en: "Name" },
+  title: { ko: "직책", en: "Title" },
+  info: { ko: "임무는 부서 기준으로 안내됩니다. 이름/직책은 표시용입니다.", en: "Duties are mapped by department. Name/Title are for display only." },
+  quickTitle: { ko: "빠른 비상 안내", en: "Quick Emergency Guide" },
+  drill: { ko: "훈련일 전용 모드", en: "Drill-day mode" },
+  q1: { ko: "비상벨/경보 확인 후 지정 집결지로 신속 이동", en: "After alarm, move to designated assembly point" },
+  q2: { ko: "엘리베이터 사용 금지 · 계단 이용", en: "Do not use elevators; use stairs" },
+  q3: { ko: "출입통제 구역 준수 · 차량 이동 자제", en: "Respect control zones; minimize vehicle movement" },
+  q4: { ko: "안내 인력 지시에 따를 것", en: "Follow staff instructions" },
+  copyLink: { ko: "현재 링크 복사", en: "Copy current link" },
+  deptLabel: { ko: "부서:", en: "Department:" },
+  copyResult: { ko: "결과 복사", en: "Copy Result" },
+  printSave: { ko: "인쇄/저장", en: "Print/Save" },
+  placeholderKo: { ko: "이름(직책) 정보를 입력하면 상단에 표시됩니다.", en: "" },
+  placeholderEn: { ko: "", en: "Enter Name/Title to see the header." },
+  privacy: { ko: "※ 본 앱은 이름·직책을 화면 표시용으로만 사용하며 서버에 저장하지 않는 정적 클라이언트 앱입니다.", en: "※ This app does not store personal data; it's a static client-only app." },
+  contactsTitle: { ko: "비상연락망", en: "Emergency Contacts" },
+  contactSearch: { ko: "부서/이름/직책/번호 검색", en: "Search dept/name/title/phone" },
+  qr: { ko: "접속용 QR 코드", en: "Access QR Code" },
+  qrNote: { ko: "배포 후 최종 URL에서 다시 생성하면 정확합니다.", en: "Re-generate after final URL for accuracy." }
+};
+
+// =========================
+// ===== Helpers & Tests ====
+// =========================
+
+function formatHeader(name: string, title: string, lang: Lang): string {
+  const disp = name && title ? `${name} (${title})` : name || title || "";
+  if (!disp) return "";
+  return lang === "ko"
+    ? `${disp}님의 임무는 다음과 같습니다.`
+    : `The duty for ${disp} is as follows.`;
+}
+
+function runSelfTests() {
+  try {
+    // 기존 테스트 유지 + 확장
+    console.assert(
+      formatHeader("홍길동", "팀장", "ko") === "홍길동 (팀장)님의 임무는 다음과 같습니다.",
+      "[TEST] header KO"
+    );
+    console.assert(
+      formatHeader("Alex Kim", "Manager", "en") === "The duty for Alex Kim (Manager) is as follows.",
+      "[TEST] header EN"
+    );
+    console.assert(formatHeader("홍길동", "", "ko") === "홍길동님의 임무는 다음과 같습니다.", "[TEST] header name only");
+    console.assert(formatHeader("", "팀장", "ko") === "팀장님의 임무는 다음과 같습니다.", "[TEST] header title only");
+    console.assert(formatHeader("", "", "ko") === "", "[TEST] header empty");
+
+    const j = ["a", "b", "c"].join("\n");
+    console.assert(j.split("\n").length === 3, "[TEST] newline join");
+
+    const hasHong = CONTACTS.some(c => [c.dept, c.name, c.title, c.phone].some(v => v.toLowerCase().includes("홍길동")));
+    console.assert(hasHong, "[TEST] contacts contains 홍길동");
+
+    console.assert(Object.keys(DUTIES).length > 0, "[TEST] duties non-empty");
+    // eslint-disable-next-line no-console
+    console.log("[SelfTests] All passed ✔");
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[SelfTests] Failed:", e);
+  }
+}
+
+// =========================
+// ====== COMPONENT =========
+// =========================
+
+export default function DisasterDutyApp() {
+  const [lang, setLang] = useState<Lang>("ko");
+  const [dept, setDept] = useState("");
+  const [name, setName] = useState("");
+  const [title, setTitle] = useState("");
+  const [resultOpen, setResultOpen] = useState(false);
+
+  const [contactsOpen, setContactsOpen] = useState(false);
+  const [contactQuery, setContactQuery] = useState("");
+
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
+  const qrCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const t = (k: keyof typeof STR) => STR[k][lang] || STR[k].ko;
+  const departments = useMemo(() => Object.keys(DUTIES), []);
+  const task = useMemo(() => (dept ? DUTIES[dept] : undefined), [dept]);
+  const headerLine = useMemo(() => formatHeader(name, title, lang), [name, title, lang]);
+
+  useEffect(() => {
+    runSelfTests();
+  }, []);
+
+  // QR 생성: 모달이 열릴 때 생성(캔버스 ref가 보장되는 타이밍)
+  useEffect(() => {
+    if (!qrOpen) return;
+    const id = requestAnimationFrame(async () => {
+      try {
+        const canvas = qrCanvasRef.current;
+        if (!canvas) return;
+        const url = window.location.href;
+        await QRCode.toCanvas(canvas, url, { errorCorrectionLevel: "H", width: 220, margin: 1 });
+        setQrDataUrl(canvas.toDataURL("image/png"));
+      } catch (e) {
+        console.error(e);
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [qrOpen]);
+
+  const filteredContacts = useMemo(() => {
+    const q = contactQuery.trim().toLowerCase();
+    if (!q) return CONTACTS;
+    return CONTACTS.filter(c => [c.dept, c.name, c.title, c.phone].some(v => v.toLowerCase().includes(q)));
+  }, [contactQuery]);
+
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      alert(lang === "ko" ? "복사되었습니다." : "Copied.");
+    } catch {
+      alert(lang === "ko" ? "복사 실패. 권한을 확인하세요." : "Copy failed. Check permissions.");
+    }
+  };
+
+  const copyResult = () => {
+    const lines: string[] = [];
+    lines.push(headerLine || (lang === "ko" ? STR.placeholderKo.ko : STR.placeholderEn.en));
+    lines.push(`${t("deptLabel")} ${dept}`);
+    if (task) {
+      lines.push(`- ${task.title[lang] || task.title.ko}`);
+      task.steps.forEach((s, i) => lines.push(`${i + 1}. ${s[lang] || s.ko}`));
+      if (task.note) lines.push(`※ ${task.note[lang] || task.note.ko}`);
+    }
+    copyText(lines.join("\n"));
+  };
+
+  const printPage = () => window.print();
+
+  const Styles = (
+    <style>{`
+      :root{--fg:#0f172a;--muted:#475569;--line:#e2e8f0;--bg:#f8fafc;--brand:#2563eb}
+      html,body,#root{height:100%}
+      body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+      .wrap{max-width:980px;margin:0 auto;padding:16px}
+      header.sticky{position:sticky;top:0;background:#fffccf99;backdrop-filter:saturate(180%) blur(6px);border-bottom:1px solid var(--line)}
+      .head-inner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px}
+      h1{font-size:18px;margin:0}
+      .badge{font-size:12px;color:#fff;background:#ef4444;border-radius:10px;padding:2px 8px;margin-left:8px}
+      .card{background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 4px 20px rgba(2,6,23,.04);padding:16px}
+      .grid{display:grid;grid-template-columns:1fr;gap:16px}
+      @media(min-width:900px){.grid{grid-template-columns:1fr 1fr}}
+      label{font-size:12px;color:var(--muted)}
+      input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;outline:none}
+      input:focus,select:focus{border-color:var(--brand)}
+      .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+      .btn{display:inline-flex;align-items:center;gap:8px;background:#111827;color:#fff;border:0;border-radius:10px;padding:10px 12px;cursor:pointer}
+      .btn.outline{background:#fff;color:#111827;border:1px solid var(--line)}
+      .muted{color:var(--muted);font-size:12px}
+      .list{padding-left:18px;margin:6px 0}
+      .list li{margin:4px 0}
+      .result{border:2px solid var(--line)}
+      .toolbar{display:flex;gap:8px;flex-wrap:wrap}
+      .flex{display:flex;gap:8px;align-items:center}
+      .lang-toggle button{border:1px solid var(--line);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer}
+      .lang-toggle button.active{background:#111827;color:#fff;border-color:#111827}
+      .footer{border-top:1px solid var(--line);margin-top:18px;padding:10px 0;color:var(--muted);font-size:12px;display:flex;justify-content:space-between}
+      dialog{border:0;border-radius:12px;box-shadow:0 25px 60px rgba(0,0,0,.15);padding:0}
+      dialog .dlg{padding:16px 20px;min-width:320px}
+      .table{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+      .table header{background:#f1f5f9;border-bottom:1px solid var(--line);padding:8px 12px}
+      .table .cell{padding:8px 12px;border-bottom:1px solid var(--line)}
+      .table .row{display:grid;grid-template-columns:1.5fr 1fr 1fr 1.2fr}
+      .table .row:last-child .cell{border-bottom:0}
+      @media print{header,.no-print{display:none!important} body{background:#fff}.wrap{max-width:none}.card{box-shadow:none;border:0}.result{border:0}}
+    `}</style>
+  );
+
+  return (
+    <div>
+      {Styles}
+      <header className="sticky">
+        <div className="head-inner wrap">
+          <div className="flex">
+            <h1>
+              재난대응 임무 안내 <span className="badge">훈련용</span>
+            </h1>
+          </div>
+          <div className="flex no-print">
+            <div className="lang-toggle">
+              <button
+                onClick={() => setLang("ko")}
+                className={lang === "ko" ? "active" : undefined}
+              >
+                KR
+              </button>
+              <button
+                onClick={() => setLang("en")}
+                className={lang === "en" ? "active" : undefined}
+              >
+                EN
+              </button>
+            </div>
+            <button className="btn outline" onClick={printPage}>Print</button>
+            <button className="btn outline" onClick={() => setContactsOpen(true)}>{STR.contactsTitle[lang]}</button>
+            <button className="btn outline" onClick={() => setQrOpen(true)}>QR</button>
+          </div>
+        </div>
+      </header>
+
+      <main className="wrap" style={{ paddingTop: 16 }}>
+        <div className="grid">
+          {/* 입력 카드 */}
+          <section className="card">
+            <div style={{ display: "grid", gap: 12 }}>
+              <div>
+                <label>{STR.dept[lang]}</label>
+                <select value={dept} onChange={e => setDept(e.target.value)}>
+                  <option value="">{STR.selectDept[lang]}</option>
+                  {departments.map(d => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="row">
+                <div>
+                  <label>{STR.name[lang]}</label>
+                  <input value={name} onChange={e => setName(e.target.value)} placeholder={lang === "ko" ? "예: 홍길동" : "e.g., Alex Kim"} />
+                </div>
+                <div>
+                  <label>{STR.title[lang]}</label>
+                  <input value={title} onChange={e => setTitle(e.target.value)} placeholder={lang === "ko" ? "예: 팀장" : "e.g., Manager"} />
+                </div>
+              </div>
+              <div className="toolbar no-print">
+                <button className="btn" onClick={() => setResultOpen(true)} disabled={!dept}>{lang === "ko" ? "임무 확인" : "Check Duty"}</button>
+                <button className="btn outline" onClick={() => { setDept(""); setName(""); setTitle(""); setResultOpen(false); }}>{lang === "ko" ? "초기화" : "Reset"}</button>
+                <span className="muted">{STR.info[lang]}</span>
+              </div>
+            </div>
+          </section>
+
+          {/* 퀵 가이드 카드 */}
+          <section className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 600 }}>{STR.quickTitle[lang]}</div>
+              <div className="muted" style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "2px 8px" }}>{STR.drill[lang]}</div>
+            </div>
+            <ul className="list">
+              <li>{STR.q1[lang]}</li>
+              <li>{STR.q2[lang]}</li>
+              <li>{STR.q3[lang]}</li>
+              <li>{STR.q4[lang]}</li>
+            </ul>
+            <button className="btn outline no-print" onClick={() => copyText(window.location.href)}>{STR.copyLink[lang]}</button>
+          </section>
+        </div>
+
+        {/* 결과 섹션 */}
+        {resultOpen && (
+          <section className="card result" style={{ marginTop: 16 }}>
+            <div style={{ fontWeight: 600 }}>
+              {headerLine || (lang === "ko" ? STR.placeholderKo.ko : STR.placeholderEn.en)}
+            </div>
+            <div className="muted" style={{ marginTop: 4 }}>
+              <span>{STR.deptLabel[lang]}</span> <span style={{ fontWeight: 600 }}>{dept || (lang === "ko" ? "(미선택)" : "(not selected)")}</span>
+            </div>
+            {task && (
+              <div>
+                <div style={{ marginTop: 10, fontWeight: 600 }}>● {task.title[lang] || task.title.ko}</div>
+                <ol className="list">
+                  {task.steps.map((s, i) => (
+                    <li key={i}>{s[lang] || s.ko}</li>
+                  ))}
+                </ol>
+                {task.note && (
+                  <div className="muted">※ {task.note[lang] || task.note.ko}</div>
+                )}
+              </div>
+            )}
+            <div className="toolbar no-print" style={{ marginTop: 8 }}>
+              <button className="btn outline" onClick={copyResult}>{STR.copyResult[lang]}</button>
+              <button className="btn" onClick={printPage}>{STR.printSave[lang]}</button>
+            </div>
+          </section>
+        )}
+
+        {/* 푸터 */}
+        <section className="footer">
+          <div>{STR.privacy[lang]}</div>
+          <div>v2.0 (React TSX)</div>
+        </section>
+      </main>
+
+      {/* 연락망 Dialog */}
+      {contactsOpen && (
+        <dialog open onClose={() => setContactsOpen(false)}>
+          <div className="dlg">
+            <header style={{ fontWeight: 600, marginBottom: 8 }}>{STR.contactsTitle[lang]}</header>
+            <input
+              value={contactQuery}
+              onChange={e => setContactQuery(e.target.value)}
+              placeholder={STR.contactSearch[lang]}
+              style={{ width: "100%", padding: 8, border: "1px solid var(--line)", borderRadius: 8 }}
+            />
+            <div className="table" style={{ marginTop: 10, maxHeight: "60vh", overflow: "auto" }}>
+              <header>List</header>
+              <div>
+                {filteredContacts.map((c, idx) => (
+                  <div className="row" key={`${c.dept}-${c.name}-${idx}`}>
+                    <div className="cell">{c.dept}</div>
+                    <div className="cell">{c.name}</div>
+                    <div className="cell">{c.title}</div>
+                    <div className="cell">{c.phone}</div>
+                  </div>
+                ))}
+                {filteredContacts.length === 0 && (
+                  <div className="cell">{lang === "ko" ? "검색 결과 없음" : "No results"}</div>
+                )}
+              </div>
+            </div>
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+              <button className="btn outline" onClick={() => setContactsOpen(false)}>Close</button>
+            </div>
+          </div>
+        </dialog>
+      )}
+
+      {/* QR Dialog */}
+      {qrOpen && (
+        <dialog open onClose={() => setQrOpen(false)}>
+          <div className="dlg" style={{ textAlign: "center" }}>
+            <header style={{ fontWeight: 600, marginBottom: 8 }}>{STR.qr[lang]}</header>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+              <canvas ref={qrCanvasRef} style={{ background: "#fff", padding: 8, borderRadius: 8 }} />
+              {qrDataUrl && (
+                <a href={qrDataUrl} download="duty-helper-qr.png">
+                  <button className="btn outline">PNG 저장</button>
+                </a>
+              )}
+              <div className="muted">{STR.qrNote[lang]}</div>
+            </div>
+            <div className="toolbar" style={{ justifyContent: "center", marginTop: 10 }}>
+              <button className="btn outline" onClick={() => setQrOpen(false)}>Close</button>
+            </div>
+          </div>
+        </dialog>
+      )}
+    </div>
+  );
+}
