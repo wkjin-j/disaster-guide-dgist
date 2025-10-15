@@ -459,3 +459,121 @@ export default function DisasterDutyHelper() {
     </div>
   );
 }
+
+/*
+====================================================================
+=  DEPLOYMENT BUNDLE (Copy/Paste files for GitHub Pages via Vite)  =
+=  아래 파일들을 로컬 프로젝트에 그대로 생성해서 사용하세요.          =
+====================================================================
+
+====================  index.html  ====================
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>재난대응 임무 안내</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/disaster-guide-dgist/assets/main.js"></script>
+    <!-- 위 경로는 Vite build 출력에 따라 달라질 수 있습니다. 
+         일반적으로 Vite는 index.html에서 src="/src/main.tsx"를 사용하고,
+         빌드 시 자동으로 올바른 경로로 치환합니다. 개발 시에는 아래 개발용 버전을 사용하세요. -->
+    <!-- 개발용: <script type="module" src="/src/main.tsx"></script> -->
+  </body>
+</html>
+
+====================  vite.config.ts  ====================
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// 꼭 repo 이름에 맞춰 수정하세요. 예: '/disaster-guide-dgist/'
+export default defineConfig({
+  plugins: [react()],
+  base: '/disaster-guide-dgist/',
+  build: {
+    outDir: 'dist'
+  }
+})
+
+====================  package.json  ====================
+{
+  "name": "disaster-guide-dgist",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/copy-404.cjs",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lucide-react": "^0.454.0",
+    "qrcode": "^1.5.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.0",
+    "vite": "^5.0.0",
+    "typescript": "^5.0.0"
+  }
+}
+
+====================  scripts/copy-404.cjs  ====================
+// dist/index.html을 dist/404.html로 복사 (SPA 라우팅 대응)
+import { copyFileSync } from 'fs'
+try {
+  copyFileSync('dist/index.html', 'dist/404.html')
+  console.log('[postbuild] 404.html copied')
+} catch (e) {
+  console.warn('[postbuild] 404 copy failed:', e)
+}
+
+====================  src/main.tsx  ====================
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+)
+
+====================  src/App.tsx  ====================
+// 본 캔버스의 default export 컴포넌트를 사용한다고 가정
+// (이 파일 내용은 캔버스 파일의 default export를 그대로 붙여넣으면 됩니다)
+// 예)
+import DisasterDutyHelper from './DisasterDutyHelper'
+export default function App() { return <DisasterDutyHelper /> }
+
+====================  src/DisasterDutyHelper.tsx  ====================
+// 이 파일에는 현재 캔버스의 전체 컴포넌트 코드를 그대로 저장하세요.
+// (본 파일 상단부터 export default function DisasterDutyHelper() 끝까지 복사)
+
+====================  tsconfig.json  ====================
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true
+  },
+  "include": ["src"]
+}
+
+====================  .gitignore  ====================
+node_modules
+.DS_Store
+/dist
+
+*/
